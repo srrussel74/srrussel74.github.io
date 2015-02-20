@@ -1,0 +1,142 @@
+---
+title: "Modeling prediction exercises with activity monitor data"
+author: "Stefan Russel"
+date: "18 Feb 2015"
+output: 
+  html_document:
+    theme: cerulean
+    keep_md: true
+---
+
+#Summary
+
+A large amount of data, about performing barbell lifts correctly and incorrectly in 5 different ways, is collected from 6 participants. In this project, the data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants is available as train set and test set from the website here: 
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv>
+
+The test data are available here: 
+
+<https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv>
+
+More information is available: <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting Exercise Dataset). 
+
+The randomForest model is build with cross valiation (5 folds) and used to predict testing data. The generalization error is estimated as 0.78%. The prediction result is approved after submission to programming assignment. 
+
+#Explore and Clean Data
+The following libraries are loaded for this project.
+```{r , echo=TRUE, results='hide', warning=FALSE}
+library(lattice)
+library(ggplot2)
+library(caret)
+library(randomForest)
+```
+
+
+```{r, echo=FALSE}
+set.seed(1)
+```
+Data as csv-files are downloaded from links as described in summary, to the workdirectory of this project. The data are loaded as following:
+```{r}
+training<-read.csv("pml-training.csv")
+testing<-read.csv("pml-testing.csv")
+```
+After checking column names, we notice only column 8 to 159 does matter as data from excercises. There are 19622 observals in training and 20 observals in testing. The total columns is 160. Before selecting features due to performing dumbell lifts, we check undefinied values (NA) in both data: 
+```{r, results='hide', warning=FALSE}
+Ncol <- lapply(training, function(x){ 
+              z<- sum(is.na(as.numeric(as.character(x))))/length(x)
+              return(z)
+              })
+```
+Total columns with no undefinied elements ('NA','DIV/0' or '') is:
+```{r}
+print(length(which(unlist(Ncol)==0)))
+```
+The impact of such elements on a column is shown by fact that column with a undefinied value has got following minimal precentage: 
+```{r}
+print(min(unlist(Ncol[which(unlist(Ncol)>0)]))*100)
+```
+So the column needs to be drop off instead of being repaired. Checking for undefinied values in an observal shows
+```{r, results='hide', warning=FALSE}
+Nrow<- apply(training, 1,function(x){
+                            z<- sum(is.na(as.numeric(as.character(x))))/length(x) 
+                            return(z)
+                          })
+
+min<-min(Nrow[which(Nrow>0)])*100
+max<-max(Nrow[which(Nrow>0)])*100
+```
+that an observal with a undefinied value has got `r min`%-`r max`% missing values. No one is free of undefinied values. The choice is to drop all columns with any undefinied values:
+```{r}
+clean<-training[,which(unlist(Ncol)==0)]
+```
+Select only columns with measurements of performing dumbell (See above), so ignore columns with names of participants, time measurements and class excercises:
+```{r}
+features<-clean[,-c(1:4,160)]
+```
+
+#Prepare Data
+
+The features with correlation higher then 0.7, are considered as reduntant, so to get set features more independent from each one and also to get more avoiding an overfitting.
+```{r}
+remove<-findCorrelation(cor(features), cutoff=0.7)
+
+traindata<-features[,-c(remove)]
+testdata<-testing[,names(traindata)]
+```
+The columns of data testing is changing in same procedure as that of training, to testdata.
+Then we add response column class back to prepare data trainingSet for training procedure with `r length(names(traindata))` predictors.
+```{r}
+set.seed(1)
+traindata<-cbind(traindata,class=training$class)
+set<-createDataPartition(y=traindata$class,p=0.7,list=FALSE)
+trainingSet<-traindata[set,]
+testingSet<-traindata[-set,]
+```
+The data traindata is splitting into two data trainingSet and testingSet, for getting an estimation of 'out of sample' error.
+
+#Build and train model
+
+To build a model we work with randomforest method, because it is designed to handle relative hug amount of predictors. Even lesser size of set predictors already is taken by cutoff predicators with correlation above 0.7. We take a resample methode of cross valiation with 5 folds. More fold will improve accurancy too little. The prediction error from this cross valiation is OOB estimate of error rate.
+
+```{r, cache=TRUE}
+set.seed(1)
+modelFitCV<-train(class~.,
+                  method="rf",
+                  data=trainingSet,
+                  trControl=trainControl(method="cv", number=5)
+                  )
+
+modelFitCV$results
+modelFitCV$finalModel
+```
+
+If more predictors are dropping for example by cutoff correlation of 0.5, the accurancy of the model with randomforest method will not change significant: -0.1%.  
+
+#Prediction and error estimation
+
+Because there is no class known at data testing, we taken two sets trainingSet and testingSet to estimate prediction error as generalization error.
+Take the model modelFitrCV and predict on out of sample testingSet:
+```{r}
+
+P<-predict(modelFitCV,testingSet[,-31])
+
+error<-100*sum(P!=testingSet$class)/length(testingSet$class)
+
+error
+```
+
+This out of sample error is considered as the generalization error. 
+The prediction is taken on unused data testing by the model modelFitCV. The prediction result is written down to files to be submit. The result is approved after submitting, but not shown here for the purpose of the assignment.
+
+```{r, echo=TRUE, results='hide'}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem__id__",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(as.character(predict(modelFitCV,testdata)))
+```
+
